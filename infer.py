@@ -24,12 +24,13 @@ from engine import train_one_epoch, evaluate
 from samplers import RASampler
 from functools import partial
 
-
 from models.dyvit import VisionTransformerDiffPruning
 from models.dylvvit import LVViTDiffPruning
 from models.dyconvnext import AdaConvNeXt
 from models.dyswin import AdaSwinTransformer
 import utils
+
+import lightning as L
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -244,11 +245,20 @@ def validate(val_loader, model, criterion):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     model.eval()
+    
+    ### Create fabric instance
+    fabric = L.Fabric(
+        accelerator=torch.device('cuda'),
+        strategy='dp',
+        devices=1,
+        num_nodes=1,
+        precision='32',
+    )
+    fabric.launch()
 
-    #progress = ProgressMeter(
-    #    len(val_loader),
-    #    [batch_time, losses, top1, top5],
-    #    prefix='Test: ')
+    ### Wrap model with fabric
+    model       = fabric.setup_module(model, move_to_device=True)
+    val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
     
     ### Use TQDM instead
     tqdm_progress_bar = tqdm(val_loader)
@@ -258,9 +268,6 @@ def validate(val_loader, model, criterion):
         end_event               = torch.cuda.Event(enable_timing=True)
 
         for i, (images, target) in enumerate(tqdm_progress_bar):
-            images = images.cuda()
-            target = target.cuda()
-
             start_event.record()
             torch.cuda.synchronize()
 
@@ -284,9 +291,6 @@ def validate(val_loader, model, criterion):
                 desc='Acc@1 Avg: {:.2f} | Average Batch Time (ms): {:.2f}'.format(top1.avg, batch_time.avg),
                 refresh=True
             )
-
-            #if i % 20 == 0:
-            #    progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
