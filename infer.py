@@ -281,6 +281,9 @@ def validate(args, val_loader, model, criterion):
     else:
         torchprofiler = None
 
+    ### Wait for profiler to be setup
+    time.sleep(5.0)
+
     ### Wrap model with fabric
     model       = fabric.setup_module(model, move_to_device=True)
     val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
