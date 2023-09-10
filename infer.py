@@ -56,7 +56,7 @@ def get_args_parser():
     ###
     ### For Profiling
     ###
-    parser.add_argument('--use-torch-profiler', action='store_true')
+    parser.add_argument('--eval-tensorboard', action='store_true')
     parser.add_argument('--forward-pass-count', default=None, type=int)
 
     return parser
