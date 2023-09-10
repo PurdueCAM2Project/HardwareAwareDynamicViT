@@ -53,6 +53,12 @@ def get_args_parser():
     parser.set_defaults(pin_mem=True)
     parser.add_argument('--base_rate', type=float, default=0.7)
 
+    ###
+    ### For Profiling
+    ###
+    parser.add_argument('--use-torch-profiler', action='store_true')
+    parser.add_argument('--forward-pass-count', default=None, type=int)
+
     return parser
 
 
@@ -182,7 +188,7 @@ def main(args):
     print('number of params:', n_parameters)
 
     criterion = torch.nn.CrossEntropyLoss().cuda()
-    validate(data_loader_val, model, criterion)
+    validate(args, data_loader_val, model, criterion)
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -239,7 +245,7 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
-def validate(val_loader, model, criterion):
+def validate(args, val_loader, model, criterion):
     batch_time = AverageMeter('Time (ms)', ':.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -256,6 +262,25 @@ def validate(val_loader, model, criterion):
     )
     fabric.launch()
 
+    ### Create torch.profiler instance
+    ### If we are using tensorboard, wrap evaluation calls with it
+    if args.eval_tensorboard:
+        torchprofiler = torch.profiler.profile(
+            ### Create profiler instance
+            activities=[torch.profiler.ProfilerActivity.CUDA, torch.profiler.ProfilerActivity.CPU],
+            schedule=torch.profiler.schedule(wait=24, warmup=25, active=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler("./bin/"),
+            record_shapes=True,
+            with_stack=True,
+            with_flops=True,
+            with_modules=True,
+        )
+
+        ### Start profiling!
+        torchprofiler.start()
+    else:
+        torchprofiler = None
+
     ### Wrap model with fabric
     model       = fabric.setup_module(model, move_to_device=True)
     val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
@@ -268,12 +293,17 @@ def validate(val_loader, model, criterion):
         end_event               = torch.cuda.Event(enable_timing=True)
 
         for i, (images, target) in enumerate(tqdm_progress_bar):
+            ### Abort early 
+            if args.forward_pass_count is not None and i > args.forward_pass_count:
+                print('infer.py: Exiting Early')
+                break
+
             ### Start recording
             start_event.record()
 
             # compute output
-            output = model(images)
-            loss = criterion(output, target)
+            output  = model(images)
+            loss    = criterion(output, target)
 
             end_event.record()
             torch.cuda.synchronize()
@@ -292,9 +322,13 @@ def validate(val_loader, model, criterion):
                 refresh=True
             )
 
-        # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
+            if torchprofiler is not None:
+                torchprofiler.step()
+
+        ###
+        ### Print info
+        ###
+        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
         print('Average Batch Time: {:.3f}'.format(batch_time.avg))
         print('Average Loss: {:.3f}'.format(losses.avg))
 
