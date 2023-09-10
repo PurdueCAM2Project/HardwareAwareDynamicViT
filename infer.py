@@ -269,11 +269,6 @@ def validate(args, val_loader, model, criterion):
     ### Use TQDM instead
     tqdm_progress_bar = tqdm(val_loader)
 
-    ### Do warmup operation - large matrix multiplication should be okay
-    dummy_warmup_tensor = torch.ones(size=(2048,1), dtype=torch.float32, device=model.device)
-    dummy_warmup_tensor = dummy_warmup_tensor * dummy_warmup_tensor.T
-    dummy_warmup_tensor = None
-
     ### Create torch.profiler instance
     ### If we are using tensorboard, wrap evaluation calls with it
     if args.eval_tensorboard:
@@ -300,11 +295,19 @@ def validate(args, val_loader, model, criterion):
         start_event             = torch.cuda.Event(enable_timing=True)
         end_event               = torch.cuda.Event(enable_timing=True)
 
-        for i, (images, target) in enumerate(tqdm_progress_bar):
+        for batch_index, (images, target) in enumerate(tqdm_progress_bar):
             ### Abort early 
-            if args.forward_pass_count is not None and i > args.forward_pass_count:
+            if args.forward_pass_count is not None and batch_index > args.forward_pass_count:
                 print('infer.py: Exiting Early')
                 break
+            
+            ###
+            ### Do warmup operation - large matrix multiplication should be okay
+            ###
+            if batch_index < 1:
+                dummy_warmup_tensor = torch.ones(size=(2048,1), dtype=torch.float32, device=model.device)
+                dummy_warmup_tensor = dummy_warmup_tensor * dummy_warmup_tensor.T
+                torch.cuda.synchronize()
 
             ### Start recording
             start_event.record()
