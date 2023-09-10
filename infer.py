@@ -238,7 +238,7 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 def validate(val_loader, model, criterion):
-    batch_time = AverageMeter('Time', ':6.3f')
+    batch_time = AverageMeter('Time (ms)', ':.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
@@ -251,14 +251,22 @@ def validate(val_loader, model, criterion):
 
 
     with torch.no_grad():
-        end = time.time()
+        start_event             = torch.cuda.Event(enable_timing=True)
+        end_event               = torch.cuda.Event(enable_timing=True)
+
         for i, (images, target) in enumerate(val_loader):
             images = images.cuda()
             target = target.cuda()
 
+            start_event.record()
+            torch.cuda.synchronize()
+
             # compute output
             output = model(images)
             loss = criterion(output, target)
+
+            end_event.record()
+            torch.cuda.synchronize()
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -267,8 +275,9 @@ def validate(val_loader, model, criterion):
             top5.update(acc5[0], images.size(0))
 
             # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+            batch_time.update( start_event.elapsed_time( end_event ) )
+            #batch_time.update(time.time() - end)
+            #end = time.time()
 
             if i % 20 == 0:
                 progress.display(i)
