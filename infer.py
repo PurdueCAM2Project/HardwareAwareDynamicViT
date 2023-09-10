@@ -262,6 +262,18 @@ def validate(args, val_loader, model, criterion):
     )
     fabric.launch()
 
+    ### Wrap model with fabric
+    model       = fabric.setup_module(model, move_to_device=True)
+    val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
+    
+    ### Use TQDM instead
+    tqdm_progress_bar = tqdm(val_loader)
+
+    ### Do warmup operation - large matrix multiplication should be okay
+    dummy_warmup_tensor = torch.ones(size=(2048,1), dtype=torch.float32, device=model.device)
+    dummy_warmup_tensor = dummy_warmup_tensor * dummy_warmup_tensor.T
+    dummy_warmup_tensor = None
+
     ### Create torch.profiler instance
     ### If we are using tensorboard, wrap evaluation calls with it
     if args.eval_tensorboard:
@@ -283,13 +295,6 @@ def validate(args, val_loader, model, criterion):
 
     ### Wait for profiler to be setup
     time.sleep(5.0)
-
-    ### Wrap model with fabric
-    model       = fabric.setup_module(model, move_to_device=True)
-    val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
-    
-    ### Use TQDM instead
-    tqdm_progress_bar = tqdm(val_loader)
 
     with torch.no_grad():
         start_event             = torch.cuda.Event(enable_timing=True)
