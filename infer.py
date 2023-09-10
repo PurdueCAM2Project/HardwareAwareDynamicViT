@@ -248,7 +248,7 @@ def validate(val_loader, model, criterion):
     
     ### Create fabric instance
     fabric = L.Fabric(
-        accelerator=torch.device('cuda'),
+        accelerator='cuda',
         strategy='dp',
         devices=1,
         num_nodes=1,
