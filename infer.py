@@ -305,7 +305,7 @@ def validate(args, val_loader, model, criterion):
             ### Do warmup operation - large matrix multiplication should be okay
             ###
             if batch_index < 1:
-                dummy_warmup_tensor = torch.ones(size=(2048,1), dtype=torch.float32, device=model.device)
+                dummy_warmup_tensor = torch.rand(size=(3200,3200), dtype=torch.float32, device=model.device)
                 dummy_warmup_tensor = dummy_warmup_tensor * dummy_warmup_tensor.T
                 torch.cuda.synchronize()
 
