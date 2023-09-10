@@ -268,8 +268,8 @@ def validate(val_loader, model, criterion):
         end_event               = torch.cuda.Event(enable_timing=True)
 
         for i, (images, target) in enumerate(tqdm_progress_bar):
+            ### Start recording
             start_event.record()
-            torch.cuda.synchronize()
 
             # compute output
             output = model(images)
