@@ -300,13 +300,11 @@ def validate(args, val_loader, model, criterion):
             if args.forward_pass_count is not None and batch_index > args.forward_pass_count:
                 print('infer.py: Exiting Early')
                 break
-            
-            ###
-            ### Do warmup operation - large matrix multiplication should be okay
-            ###
+
+            ### Simple Warmup 
             if batch_index < 1:
-                dummy_warmup_tensor = torch.rand(size=(3200,3200), dtype=torch.float32, device=model.device)
-                dummy_warmup_tensor = dummy_warmup_tensor * dummy_warmup_tensor.T
+                for k in range(25):
+                    _ = model(images)
                 torch.cuda.synchronize()
 
             ### Start recording
