@@ -303,7 +303,7 @@ def validate(args, val_loader, model, criterion):
 
             ### Simple Warmup 
             if batch_index < 1:
-                for k in range(25):
+                for k in range(10):
                     _ = model(images)
                 torch.cuda.synchronize()
 
