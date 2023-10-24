@@ -258,7 +258,7 @@ def validate(args, val_loader, model, criterion):
         strategy='dp',
         devices=1,
         num_nodes=1,
-        precision='32',
+        precision='32-true',
     )
     fabric.launch()
 
