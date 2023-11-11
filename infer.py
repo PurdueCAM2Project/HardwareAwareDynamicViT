@@ -69,6 +69,8 @@ def list_to_int_list( list : List) -> List[int]:
     return [int(k) for k in list]
 
 def main(args):
+    ### Set matmul precision
+    torch.set_float32_matmul_precision('high')
 
     cudnn.benchmark = True
     dataset_val, _ = build_dataset(is_train=False, args=args)
