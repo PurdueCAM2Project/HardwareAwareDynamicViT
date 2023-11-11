@@ -72,7 +72,7 @@ def main(args):
     ### Set matmul precision
     torch.set_float32_matmul_precision('high')
 
-    cudnn.benchmark = True
+    #cudnn.benchmark = True
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
     data_loader_val = torch.utils.data.DataLoader(
