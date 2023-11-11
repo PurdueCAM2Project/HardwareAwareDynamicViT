@@ -29,6 +29,7 @@ from models.dylvvit import LVViTDiffPruning
 from models.dyconvnext import AdaConvNeXt
 from models.dyswin import AdaSwinTransformer
 import utils
+from typing import Any, List, Dict, Tuple
 
 import lightning as L
 
@@ -52,15 +53,20 @@ def get_args_parser():
                         help='')
     parser.set_defaults(pin_mem=True)
     parser.add_argument('--base_rate', type=float, default=0.7)
+    parser.add_argument('--no-progress-bar', action='store_true')
 
     ###
     ### For Profiling
     ###
     parser.add_argument('--eval-tensorboard', action='store_true')
     parser.add_argument('--forward-pass-count', default=None, type=int)
+    parser.add_argument('--pruning-loc-mask', nargs='+', default=None)
 
     return parser
 
+### Utility function for pruning location overriding
+def list_to_int_list( list : List) -> List[int]:
+    return [int(k) for k in list]
 
 def main(args):
 
@@ -81,12 +87,23 @@ def main(args):
 
     print(f"Creating model: {args.model}")
 
+    ###
+    ### Initialize empty pruning location mask
+    ### 
+    PRUNING_LOC_MASK = None
+
     if args.model == 'deit-s':
-        PRUNING_LOC = [3,6,9] 
+        PRUNING_LOC = [3,6,9]
+        
+        ### Check if we want to override pruning loc
+        if args.pruning_loc_mask is not None:
+            PRUNING_LOC_MASK = list_to_int_list(args.pruning_loc_mask)
+            print('infer.py: WARNING, masking all pruning locations except {}'.format(PRUNING_LOC_MASK))
+
         print('token_ratio =', KEEP_RATE1, 'at layer', PRUNING_LOC)
         model = VisionTransformerDiffPruning(
             patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True, 
-            pruning_loc=PRUNING_LOC, token_ratio=KEEP_RATE1
+            pruning_loc=PRUNING_LOC, token_ratio=KEEP_RATE1, pruning_loc_mask=PRUNING_LOC_MASK
             )
     elif args.model == 'deit-256':
         PRUNING_LOC = [3,6,9] 
@@ -97,10 +114,16 @@ def main(args):
             )
     elif args.model == 'deit-b':
         PRUNING_LOC = [3,6,9] 
+
+        ### Check if we want to override pruning loc
+        if args.pruning_loc_mask is not None:
+            PRUNING_LOC_MASK = list_to_int_list(args.pruning_loc_mask)
+            print('infer.py: WARNING, masking all pruning locations except {}'.format(PRUNING_LOC_MASK))
+
         print('token_ratio =', KEEP_RATE1, 'at layer', PRUNING_LOC)
         model = VisionTransformerDiffPruning(
             patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, 
-            pruning_loc=PRUNING_LOC, token_ratio=KEEP_RATE1
+            pruning_loc=PRUNING_LOC, token_ratio=KEEP_RATE1, pruning_loc_mask=PRUNING_LOC_MASK
             )
     elif args.model == 'lvvit-s':
         PRUNING_LOC = [4,8,12] 
@@ -267,7 +290,7 @@ def validate(args, val_loader, model, criterion):
     val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
     
     ### Use TQDM instead
-    tqdm_progress_bar = tqdm(val_loader)
+    dataloader_object = val_loader if args.no_progress_bar else tqdm(val_loader)
 
     ### Create torch.profiler instance
     ### If we are using tensorboard, wrap evaluation calls with it
@@ -295,7 +318,7 @@ def validate(args, val_loader, model, criterion):
         start_event             = torch.cuda.Event(enable_timing=True)
         end_event               = torch.cuda.Event(enable_timing=True)
 
-        for batch_index, (images, target) in enumerate(tqdm_progress_bar):
+        for batch_index, (images, target) in enumerate(dataloader_object):
             ### Abort early 
             if args.forward_pass_count is not None and batch_index > args.forward_pass_count:
                 print('infer.py: Exiting Early')
@@ -326,10 +349,11 @@ def validate(args, val_loader, model, criterion):
             # measure elapsed time
             batch_time.update( start_event.elapsed_time( end_event ) )
 
-            tqdm_progress_bar.set_description(
-                desc='Acc@1 Avg: {:.2f} | Average Batch Time (ms): {:.2f}'.format(top1.avg, batch_time.avg),
-                refresh=True
-            )
+            if not args.no_progress_bar:
+                dataloader_object.set_description(
+                    desc='Acc@1 Avg: {:.2f} | Average Batch Time (ms): {:.2f}'.format(top1.avg, batch_time.avg),
+                    refresh=True
+                )
 
             if torchprofiler is not None:
                 torchprofiler.step()

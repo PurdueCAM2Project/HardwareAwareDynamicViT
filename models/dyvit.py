@@ -322,7 +322,9 @@ class VisionTransformerDiffPruning(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, qk_scale=None, representation_size=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., hybrid_backbone=None, norm_layer=None, 
-                 pruning_loc=None, token_ratio=None, distill=False):
+                 pruning_loc=None, token_ratio=None, distill=False, 
+                 ### ADDED BY US!
+                 pruning_loc_mask=None):
         """
         Args:
             img_size (int, tuple): input image size
@@ -391,6 +393,11 @@ class VisionTransformerDiffPruning(nn.Module):
         self.pruning_loc = pruning_loc
         self.token_ratio = token_ratio
 
+        ###
+        ### CUSTOM Attribute
+        ###
+        self.pruning_loc_mask = pruning_loc_mask if pruning_loc_mask is not None else pruning_loc
+
         trunc_normal_(self.pos_embed, std=.02)
         trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
@@ -430,7 +437,13 @@ class VisionTransformerDiffPruning(nn.Module):
         prev_decision = torch.ones(B, init_n, 1, dtype=x.dtype, device=x.device)
         policy = torch.ones(B, init_n + 1, 1, dtype=x.dtype, device=x.device)
         for i, blk in enumerate(self.blocks):
-            if i in self.pruning_loc:
+            ###
+            ### MINOR CHANGE!
+            ### 
+            ### ORIGINAL
+            #if i in self.pruning_loc:
+            ### OURS
+            if i in self.pruning_loc_mask:
                 spatial_x = x[:, 1:]
                 pred_score = self.score_predictor[p_count](spatial_x, prev_decision).reshape(B, -1, 2)
                 if self.training:
