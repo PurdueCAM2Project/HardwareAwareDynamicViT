@@ -324,9 +324,11 @@ def validate(args, val_loader, model, criterion):
             # compute output
             output = model(images)
 
+            predictions = torch.argmax(output, dim=1)
+
             ### Append running accuracy
             running_accuracy += (
-                output == target
+                predictions == target
             ).sum().item() / target.shape[0]
 
             dataloader_object.set_description(desc=f"Recording Accuracy...", refresh=False)
