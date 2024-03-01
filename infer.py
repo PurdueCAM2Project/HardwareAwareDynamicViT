@@ -353,7 +353,7 @@ def validate(args, val_loader, model, criterion):
 
         }
     ).to_csv(
-        f"bin/dynamic_vit_r{args.base_rate}{"_" + args.output_filename_suffix if args.output_filename_suffix != "" else ""}_inference_data.csv",
+        f"bin/dynamic_vit_r{args.base_rate}_{args.output_filename_suffix}_inference_data.csv",
         float_format="{:.2f}".format,
     )
 
