@@ -31,7 +31,9 @@ from models.dyswin import AdaSwinTransformer
 import utils
 from typing import Any, List, Dict, Tuple
 
-import lightning as L
+import pandas
+
+import torch.utils.benchmark as bench
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -54,13 +56,14 @@ def get_args_parser():
     parser.set_defaults(pin_mem=True)
     parser.add_argument('--base_rate', type=float, default=0.7)
     parser.add_argument('--no-progress-bar', action='store_true')
+    parser.add_argument("--device", type=str, default="cuda:0")
 
     ###
     ### For Profiling
     ###
-    parser.add_argument('--eval-tensorboard', action='store_true')
-    parser.add_argument('--forward-pass-count', default=None, type=int)
     parser.add_argument('--pruning-loc-mask', nargs='+', default=None)
+    parser.add_argument("--output-filename-suffix", type=str, default="")
+    parser.add_argument("--evaluate-only-no-accuracy", action="store_true")
 
     return parser
 
@@ -270,104 +273,89 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
-def validate(args, val_loader, model, criterion):
-    batch_time = AverageMeter('Time (ms)', ':.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    model.eval()
-    
-    ### Create fabric instance
-    fabric = L.Fabric(
-        accelerator='cuda',
-        strategy='dp',
-        devices=1,
-        num_nodes=1,
-        precision='32-true',
+###
+### Benchmark function for profiling wrapped models
+### 
+def benchmark_milliseconds_wrapped(
+    args : argparse.Namespace, 
+    x : torch.Tensor, 
+    model : torch.nn.Module
+    ) -> bench.Measurement:
+    ### Set a minimum runtime 
+    MIN_RUNTIME = 32.0
+
+    t0 = bench.Timer(
+        stmt=f"model(x)",
+        globals={
+            "x" : x,
+            "model" : model,
+        }
     )
-    fabric.launch()
 
-    ### Wrap model with fabric
-    model       = fabric.setup_module(model, move_to_device=True)
-    val_loader  = fabric.setup_dataloaders(val_loader, use_distributed_sampler=False, move_to_device=True)
+    return t0.blocked_autorange(min_run_time=MIN_RUNTIME)
+
+def validate(args, val_loader, model, criterion):
+    ### Port to device
+    model.eval().to(args.device)
     
+    ### Latency measurment data
+    latency_measurement = None
+
+    ### Accuracy computation
+    running_accuracy = 0.0
+
     ### Use TQDM instead
-    dataloader_object = val_loader if args.no_progress_bar else tqdm(val_loader)
-
-    ### Create torch.profiler instance
-    ### If we are using tensorboard, wrap evaluation calls with it
-    if args.eval_tensorboard:
-        torchprofiler = torch.profiler.profile(
-            ### Create profiler instance
-            activities=[torch.profiler.ProfilerActivity.CUDA, torch.profiler.ProfilerActivity.CPU],
-            schedule=torch.profiler.schedule(wait=24, warmup=25, active=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./bin/"),
-            record_shapes=True,
-            with_stack=True,
-            with_flops=True,
-            with_modules=True,
-        )
-
-        ### Start profiling!
-        torchprofiler.start()
-    else:
-        torchprofiler = None
-
-    ### Wait for profiler to be setup
-    time.sleep(5.0)
+    dataloader_object = tqdm(val_loader)
 
     with torch.no_grad():
-        start_event             = torch.cuda.Event(enable_timing=True)
-        end_event               = torch.cuda.Event(enable_timing=True)
-
         for batch_index, (images, target) in enumerate(dataloader_object):
-            ### Abort early 
-            if args.forward_pass_count is not None and batch_index > args.forward_pass_count:
-                print('infer.py: Exiting Early')
-                break
+            ### To Device
+            images = images.to(args.device)
+            target = target.to(args.device)
 
-            ### Simple Warmup 
-            if batch_index < 1:
-                for k in range(10):
-                    _ = model(images)
-                torch.cuda.synchronize()
+            ### Benchmark timing 
+            if batch_index == 0:
+                dataloader_object.set_description(desc="Benchmarking (potentially wrapped) model...")
+                latency_measurement = benchmark_milliseconds_wrapped(args, images, model)
 
-            ### Start recording
-            start_event.record()
+                if args.evaluate_only_no_accuracy:
+                    break
 
             # compute output
-            output  = model(images)
-            loss    = criterion(output, target)
+            output = model(images)
 
-            end_event.record()
-            torch.cuda.synchronize()
+            ### Append running accuracy
+            running_accuracy += (
+                output == target
+            ).sum().item() / target.shape[0]
 
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
+            dataloader_object.set_description(desc=f"Recording Accuracy...", refresh=False)
 
-            # measure elapsed time
-            batch_time.update( start_event.elapsed_time( end_event ) )
+    accuracy = 100.0 * running_accuracy / len(dataloader_object) if not args.evaluate_only_no_accuracy else -1.0
 
-            if not args.no_progress_bar:
-                dataloader_object.set_description(
-                    desc='Acc@1 Avg: {:.2f} | Average Batch Time (ms): {:.2f}'.format(top1.avg, batch_time.avg),
-                    refresh=True
-                )
+    latency_mean = latency_measurement.mean * 1e3
+    latency_median = latency_measurement.median * 1e3
+    latency_iqr = latency_measurement.iqr * 1e3
 
-            if torchprofiler is not None:
-                torchprofiler.step()
+    ### Print Accuracy
+    print("gpu_tail_measure.py: Accuracy is {:.3f}".format(accuracy))
+    
+    ### Print Latency Data
+    print("gpu_tail_measure.py: Latency (ms) stats Mean/Median/IQR are {:.3f} / {:.3f} / {:.3f}".format(latency_mean, latency_median, latency_iqr))
 
-        ###
-        ### Print info
-        ###
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
-        print('Average Batch Time: {:.3f}'.format(batch_time.avg))
-        print('Average Loss: {:.3f}'.format(losses.avg))
+    ### Save as .CSV data
+    eval_dataframe = pandas.DataFrame(
+        data={
+            "Accuracy": [accuracy],
+            "Avg. Latency (ms)": [latency_mean],
+            "Median Latency (ms)": [latency_median],
+            "Latency IQR (ms)": [latency_iqr],
 
-    return top1.avg
+        }
+    ).to_csv(
+        f"bin/dynamic_vit_r{args.base_rate}{"_" + args.output_filename_suffix if args.output_filename_suffix != "" else ""}_inference_data.csv",
+        float_format="{:.2f}".format,
+    )
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Dynamic evaluation script', parents=[get_args_parser()])
